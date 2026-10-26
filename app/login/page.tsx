@@ -152,7 +152,7 @@ export default function LoginPage() {
             <button type="submit" className="primary-button login-submit" disabled={loading || !configured}>{loading ? "Memeriksa akun..." : "Masuk ke dashboard"}<ArrowRight size={17} /></button>
             <div className="login-demo-divider"><span />atau<span /></div>
             <button type="button" className="login-demo-button" onClick={demoLogin} disabled={loading || !configured}>
-              <Sparkles size={16} />{loading ? "Menyiapkan demo..." : "Masuk demo"}
+              {loading ? "Menyiapkan demo..." : "Masuk demo"}
             </button>
           </form>
           <div className="login-security"><span className="secure-dot" /> Autentikasi dan data diambil dari Supabase</div>
