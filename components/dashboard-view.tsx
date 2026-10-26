@@ -4,16 +4,9 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   ArrowDownRight, ArrowRight, ArrowUpRight, Banknote, Boxes, CalendarDays, ChevronDown,
-  CircleAlert, ClipboardCheck, Factory, MoreHorizontal, ShoppingCart, Sparkles, TrendingUp,
+  CircleAlert, ClipboardCheck, Factory, ShoppingCart, Sparkles, TrendingUp,
 } from "lucide-react";
 import type { DashboardSnapshot } from "@/lib/dashboard-data";
-import { salesSeries } from "@/lib/erp-data";
-
-const categories = [
-  { label: "Baju", amount: "Rp38.420.000", value: 76, color: "#b82e45", hint: "142 unit terjual" },
-  { label: "Celana", amount: "Rp26.870.000", value: 58, color: "#d45a6c", hint: "86 unit terjual" },
-  { label: "Sepatu", amount: "Rp19.360.000", value: 42, color: "#e9a0aa", hint: "38 unit terjual" },
-];
 
 const initialsTone: Record<string, string> = { lavender: "lavender", peach: "peach", mint: "mint", blue: "blue", rose: "rose" };
 
@@ -56,7 +49,7 @@ function FashionHeroArtwork() {
   );
 }
 
-function Chart({ values, period }: { values: number[]; period: string }) {
+function Chart({ values, labels }: { values: number[]; labels: string[] }) {
   const dimensions = { width: 720, height: 216, left: 8, right: 12, top: 14, bottom: 24 };
   const plotWidth = dimensions.width - dimensions.left - dimensions.right;
   const plotHeight = dimensions.height - dimensions.top - dimensions.bottom;
@@ -68,10 +61,6 @@ function Chart({ values, period }: { values: number[]; period: string }) {
   }));
   const line = points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`).join(" ");
   const area = `${line} L${points[points.length - 1]?.x ?? 0},${dimensions.height - dimensions.bottom} L${points[0]?.x ?? 0},${dimensions.height - dimensions.bottom} Z`;
-  const sixLabels = ["Mei", "Jun", "Jul", "Agu", "Sep", "Okt"];
-  const twelveLabels = ["Nov", "Des", "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt"];
-  const labels = period === "12m" ? twelveLabels : sixLabels;
-
   return (
     <div className="chart-wrap">
       <div className="chart-y-labels">{[1, .75, .5, .25, 0].map((ratio) => <span key={ratio}>{ratio === 0 ? "Rp0" : `Rp${new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 0 }).format(scaleMax * ratio)}`}</span>)}</div>
@@ -87,7 +76,7 @@ function Chart({ values, period }: { values: number[]; period: string }) {
           {points.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r={index === points.length - 1 ? 5 : 3.5} className={index === points.length - 1 ? "chart-point current" : "chart-point"} />)}
         </svg>
         <div className="chart-x-labels">{labels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
-        <div className="chart-tooltip"><span>Oktober 2026</span><strong>{new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(values[values.length - 1] ?? 0)}</strong><small>penjualan tercatat bulan ini</small></div>
+        <div className="chart-tooltip"><span>{labels[labels.length - 1] ?? "Periode terbaru"}</span><strong>{new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(values[values.length - 1] ?? 0)}</strong><small>penjualan tercatat pada bulan ini</small></div>
       </div>
     </div>
   );
@@ -130,11 +119,8 @@ export function DashboardView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const [period, setPeriod] = useState("6m");
   const [showAll, setShowAll] = useState(false);
   const [toast, setToast] = useState("");
-  const values = useMemo(() => {
-    if (period === "12m") return salesSeries.twelveMonths;
-    if (snapshot.source === "demo") return snapshot.sales;
-    return snapshot.sales.length > 6 ? snapshot.sales.slice(-6) : snapshot.sales.length ? snapshot.sales : [0, 0, 0, 0, 0, 0];
-  }, [period, snapshot]);
+  const values = useMemo(() => period === "12m" ? snapshot.sales : snapshot.sales.slice(-6), [period, snapshot.sales]);
+  const chartLabels = period === "12m" ? snapshot.monthLabels : snapshot.monthLabels.slice(-6);
 
   function exportCsv() {
     const header = "Nomor transaksi,Pelanggan,Tanggal,Nilai,Status";
@@ -156,15 +142,17 @@ export function DashboardView({ snapshot }: { snapshot: DashboardSnapshot }) {
     <div className="dashboard-page">
       <div className="page-heading dashboard-heading">
         <div>
-          <div className="eyebrow-row"><span className="eyebrow">RINGKASAN BISNIS</span>{snapshot.source === "supabase" && <span className="live-pill"><i /> Transaksi tersinkron</span>}</div>
-          <h1>Selamat pagi, Aditya <span className="greeting-sun">✦</span></h1>
+          <div className="eyebrow-row"><span className="eyebrow">RINGKASAN BISNIS</span><span className="live-pill"><i /> DATA SUPABASE</span></div>
+          <h1>Selamat datang, {snapshot.greetingName} <span className="greeting-sun">✦</span></h1>
           <p>Pantau performa dan aktivitas bisnis VARENO hari ini.</p>
         </div>
         <div className="heading-actions">
-          <button className="secondary-button date-button"><CalendarDays size={16} /><span>1 — 26 Okt 2026</span><ChevronDown size={15} /></button>
+          <span className="secondary-button date-button"><CalendarDays size={16} /><span>Data aktual · 12 bulan</span></span>
           <Link href="/sales" className="primary-button"><svg className="button-spark" viewBox="0 0 18 18" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9 3v12M3 9h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /><circle cx="9" cy="9" r="7.2" stroke="currentColor" strokeWidth="1.1" opacity=".36" /></svg> Buat transaksi</Link>
         </div>
       </div>
+
+      {snapshot.error && <div className="database-error" role="alert"><strong>Data dashboard belum dapat dimuat.</strong><span>{snapshot.error}</span><Link href="/help#database">Periksa koneksi dan migrasi di Pusat Bantuan</Link></div>}
 
       <section className="dashboard-hero">
         <div className="hero-copy">
@@ -172,7 +160,7 @@ export function DashboardView({ snapshot }: { snapshot: DashboardSnapshot }) {
           <h2>Dari bahan ke produk,<br /><em>semua terhubung.</em></h2>
           <p>Satu ruang untuk melihat koleksi, stok, produksi, dan pesanan berjalan seirama.</p>
           <div className="hero-bottom-row">
-            <div className="hero-facts"><span><strong>03</strong> kategori</span><i /><span><strong>07</strong> peran tim</span><i /><span><strong>01</strong> sumber data</span></div>
+            <div className="hero-facts"><span><strong>Live</strong> data Supabase</span><i /><span><strong>Aktual</strong> transaksi</span><i /><span><strong>Terhubung</strong> antar modul</span></div>
             <Link href="/products" className="hero-cta">Jelajahi katalog <ArrowRight size={15} /></Link>
           </div>
         </div>
@@ -189,7 +177,7 @@ export function DashboardView({ snapshot }: { snapshot: DashboardSnapshot }) {
           return (
             <article className="metric-card" key={metric.label}>
               <MetricArtwork index={index} />
-              <div className="metric-top"><span className={`metric-icon metric-icon-${index}`}><Icon size={18} strokeWidth={1.9} /></span><button className="subtle-icon" aria-label={`Opsi ${metric.label}`} onClick={() => setToast(`Ringkasan ${metric.label.toLowerCase()} dipilih.`)}><MoreHorizontal size={18} /></button></div>
+              <div className="metric-top"><span className={`metric-icon metric-icon-${index}`}><Icon size={18} strokeWidth={1.9} /></span><Link className="subtle-icon" aria-label={`Buka modul ${metric.label}`} href={["/sales", "/inventory", "/production", "/reports"][index]}><ArrowRight size={16} /></Link></div>
               <div className="metric-label">{metric.label}</div>
               <div className="metric-value">{metric.value}</div>
               <div className="metric-foot"><span className={`metric-change ${metric.direction === "up" ? "positive" : "negative"}`}>{hasTrend ? metric.direction === "up" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} /> : null}{metric.change}</span><span>{metric.note}</span></div>
@@ -204,14 +192,12 @@ export function DashboardView({ snapshot }: { snapshot: DashboardSnapshot }) {
             <div><div className="panel-title">Tren penjualan</div><div className="panel-subtitle">Performa penjualan VARENO dari waktu ke waktu</div></div>
             <label className="select-wrap"><select value={period} onChange={(event) => setPeriod(event.target.value)} aria-label="Rentang grafik"><option value="6m">6 bulan</option><option value="12m">12 bulan</option></select><ChevronDown size={14} /></label>
           </div>
-          <div className="chart-summary"><strong>{snapshot.metrics[0].value}</strong><span className="metric-change positive"><ArrowUpRight size={14} />{snapshot.source === "demo" ? "12,8%" : "Aktual"}</span><small>total penjualan bulan ini</small></div>
-          <Chart values={values} period={period} />
-          <div className="chart-legend"><span><i className="legend-dot actual" />Penjualan aktual</span><button onClick={exportCsv}>Unduh laporan <ArrowRight size={14} /></button></div>
+          {snapshot.readAccess.sales ? <><div className="chart-summary"><strong>{snapshot.metrics[0].value}</strong><span className={`metric-change ${snapshot.metrics[0].direction === "up" ? "positive" : "negative"}`}>{snapshot.metrics[0].change}</span><small>total penjualan bulan ini · Supabase</small></div><Chart values={values} labels={chartLabels} /><div className="chart-legend"><span><i className="legend-dot actual" />Penjualan aktual</span><button onClick={exportCsv}>Unduh laporan <ArrowRight size={14} /></button></div></> : <div className="empty-state">Peran Anda tidak memiliki akses baca ke data penjualan.</div>}
         </section>
 
         <section className="panel category-panel">
-          <div className="panel-heading"><div><div className="panel-title">Penjualan per kategori</div><div className="panel-subtitle">{snapshot.source === "demo" ? "Kontribusi bulan ini" : "Representasi kategori · data ilustrasi"}</div></div><button className="subtle-icon" aria-label="Menu kategori" onClick={() => setToast("Ringkasan kategori untuk Oktober 2026.")}><MoreHorizontal size={18} /></button></div>
-          {snapshot.source === "demo" ? <><div className="category-total"><strong>{snapshot.metrics[0].value}</strong><span><TrendingUp size={14} /> 12,8%</span></div><div className="category-bars">{categories.map((category) => <div className="category-row" key={category.label}><div className="category-line"><span>{category.label}</span><strong>{category.amount}</strong></div><div className="progress-track"><span style={{ width: `${category.value}%`, backgroundColor: category.color }} /></div><small>{category.hint}</small></div>)}</div><Link href="/reports" className="text-link category-link">Lihat laporan lengkap <ArrowRight size={15} /></Link></> : <div className="empty-state category-empty">Data kategori akan tampil setelah transaksi produk dan SKU terhubung.</div>}
+          <div className="panel-heading"><div><div className="panel-title">Penjualan per kategori</div><div className="panel-subtitle">Kontribusi kategori dari transaksi Supabase</div></div><Link href="/reports" className="subtle-icon" aria-label="Lihat laporan kategori"><ArrowRight size={16} /></Link></div>
+          {!snapshot.readAccess.sales ? <div className="empty-state category-empty">Peran Anda tidak memiliki akses baca ke data penjualan.</div> : snapshot.categories.length ? <><div className="category-total"><strong>{snapshot.metrics[0].value}</strong><span><TrendingUp size={14} /> Aktual</span></div><div className="category-bars">{snapshot.categories.map((category) => <div className="category-row" key={category.label}><div className="category-line"><span>{category.label}</span><strong>{category.amount}</strong></div><div className="progress-track"><span style={{ width: `${category.value}%`, backgroundColor: category.color }} /></div><small>{category.hint}</small></div>)}</div><Link href="/reports" className="text-link category-link">Lihat laporan lengkap <ArrowRight size={15} /></Link></> : <div className="empty-state category-empty">Belum ada item penjualan berkategori pada periode ini.</div>}
         </section>
       </div>
 
@@ -225,10 +211,10 @@ export function DashboardView({ snapshot }: { snapshot: DashboardSnapshot }) {
         <section className="panel attention-panel">
           <div className="panel-heading"><div><div className="panel-title">Perlu perhatian</div><div className="panel-subtitle">Hal yang membutuhkan tindak lanjut</div></div><span className="attention-count">{snapshot.alerts.length + snapshot.pendingQc + snapshot.pendingApprovals}</span></div>
           <div className="attention-list">
-            {snapshot.alerts.slice(0, 2).map((alert) => <Link href="/inventory" className="attention-item" key={alert.code}><span className="attention-icon stock"><CircleAlert size={17} /></span><span className="attention-copy"><strong>Stok menipis</strong><small>{alert.name} · {alert.stock} tersisa</small></span><ArrowRight size={15} className="attention-arrow" /></Link>)}
-            {snapshot.pendingQc > 0 && <Link href="/production" className="attention-item"><span className="attention-icon qc"><ClipboardCheck size={17} /></span><span className="attention-copy"><strong>{snapshot.pendingQc} perintah menunggu QC</strong><small>Hasil produksi perlu diperiksa</small></span><ArrowRight size={15} className="attention-arrow" /></Link>}
-            {snapshot.pendingApprovals > 0 && <Link href="/purchases" className="attention-item"><span className="attention-icon po"><ShoppingCart size={17} /></span><span className="attention-copy"><strong>{snapshot.pendingApprovals} PO perlu persetujuan</strong><small>Periksa permintaan pembelian</small></span><ArrowRight size={15} className="attention-arrow" /></Link>}
-            {snapshot.source === "supabase" && snapshot.alerts.length === 0 && snapshot.pendingQc === 0 && snapshot.pendingApprovals === 0 && <div className="empty-state">Semua aktivitas operasional sudah terpantau.</div>}
+            {snapshot.readAccess.stock && snapshot.alerts.slice(0, 2).map((alert) => <Link href="/inventory" className="attention-item" key={alert.code}><span className="attention-icon stock"><CircleAlert size={17} /></span><span className="attention-copy"><strong>Stok menipis</strong><small>{alert.name} · {alert.stock} tersisa</small></span><ArrowRight size={15} className="attention-arrow" /></Link>)}
+            {snapshot.readAccess.production && snapshot.pendingQc > 0 && <Link href="/production" className="attention-item"><span className="attention-icon qc"><ClipboardCheck size={17} /></span><span className="attention-copy"><strong>{snapshot.pendingQc} perintah menunggu QC</strong><small>Hasil produksi perlu diperiksa</small></span><ArrowRight size={15} className="attention-arrow" /></Link>}
+            {snapshot.readAccess.purchases && snapshot.pendingApprovals > 0 && <Link href="/purchases" className="attention-item"><span className="attention-icon po"><ShoppingCart size={17} /></span><span className="attention-copy"><strong>{snapshot.pendingApprovals} PO perlu persetujuan</strong><small>Periksa permintaan pembelian</small></span><ArrowRight size={15} className="attention-arrow" /></Link>}
+            {snapshot.alerts.length === 0 && snapshot.pendingQc === 0 && snapshot.pendingApprovals === 0 && <div className="empty-state">Tidak ada tindak lanjut pada data yang dapat Anda akses.</div>}
           </div>
           <Link href="/inventory" className="text-link attention-link">Buka pusat aktivitas <ArrowRight size={15} /></Link>
         </section>

@@ -1,8 +1,11 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
-import { Activity, ArrowRight, BarChart3, Boxes, CalendarDays, ChevronDown, CirclePlus, Download, Factory, Filter, Layers, Package, Plus, Search, ShoppingBag, ShoppingCart, SlidersHorizontal, Users, WalletCards, X, type LucideIcon } from "lucide-react";
-import type { ModuleDefinition, ModuleRecord } from "@/lib/erp-data";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Activity, ArrowRight, BarChart3, Boxes, CirclePlus, Download, Factory, Filter, Layers, Package, Plus, RefreshCw, Search, ShoppingBag, ShoppingCart, SlidersHorizontal, Users, WalletCards, X, type LucideIcon } from "lucide-react";
+import type { ModuleDefinition } from "@/lib/erp-data";
+import type { ModuleOption, ModuleRow } from "@/lib/module-data";
 
 const moduleStories: Record<string, { title: string; description: string }> = {
   products: { title: "Koleksi yang siap masuk ritme produksi.", description: "Spesifikasi, komposisi, dan harga produk berada dalam satu alur." },
@@ -176,57 +179,205 @@ function statusClass(value: string) {
   return "status-neutral";
 }
 
-export function ModuleView({ moduleKey, definition }: { moduleKey: string; definition: ModuleDefinition }) {
-  const [rows, setRows] = useState(definition.rows);
+type FieldSpec = { key: string; label: string; type?: "text" | "email" | "number" | "date" | "select" | "textarea"; options?: ModuleOption[]; required?: boolean; min?: number; step?: string };
+type WorkflowAction = { action: string; label: string };
+const field = (key: string, label: string, type: FieldSpec["type"] = "text", options?: ModuleOption[], required = true, min?: number, step?: string): FieldSpec => ({ key, label, type, options, required, min, step });
+
+function formFields(moduleKey: string, options: Record<string, ModuleOption[]>): FieldSpec[] {
+  switch (moduleKey) {
+    case "products": return [field("name", "Nama produk"), field("model", "Kode model"), field("category", "Kategori"), field("sku", "SKU"), field("variantName", "Nama varian"), field("size", "Ukuran"), field("color", "Warna"), field("unitPrice", "Harga jual (Rp)", "number", undefined, true, 0, "1"), field("unitCost", "HPP / biaya satuan (Rp)", "number", undefined, true, 0, "1"), field("minimumStock", "Stok minimum", "number", undefined, true, 0, "0.001")];
+    case "purchases": return [field("supplierId", "Pemasok", "select", options.suppliers), field("materialCode", "Bahan baku", "select", options.materials), field("quantity", "Jumlah", "number", undefined, true, 0, "0.001"), field("unitPrice", "Harga per unit (Rp)", "number", undefined, true, 0, "1"), field("date", "Tanggal pesanan", "date")];
+    case "inventory": return [field("item", "Item", "select", options.inventoryItems), field("movementType", "Jenis mutasi", "select", [{ label: "Stok masuk", value: "MASUK" }, { label: "Stok keluar", value: "KELUAR" }]), field("quantity", "Jumlah", "number", undefined, true, 0, "0.001"), field("reason", "Alasan mutasi", "text")];
+    case "production": return [field("sku", "Produk / SKU", "select", options.variants), field("quantity", "Jumlah rencana", "number", undefined, true, 1, "1"), field("date", "Target selesai", "date")];
+    case "sales": return [field("customerId", "Pelanggan", "select", options.customers), field("sku", "Produk / SKU", "select", options.variants), field("quantity", "Jumlah", "number", undefined, true, 1, "1"), field("discount", "Diskon total (Rp)", "number", undefined, true, 0, "1")];
+    case "finance": return [field("type", "Jenis biaya"), field("amount", "Jumlah (Rp)", "number", undefined, true, 1, "1"), field("description", "Keterangan", "textarea", undefined, false), field("date", "Tanggal transaksi", "date")];
+    case "users": return [field("fullName", "Nama lengkap"), field("email", "Email", "email"), field("role", "Peran", "select", ["Admin", "Pengadaan", "Gudang", "Produksi", "Penjualan", "Keuangan"].map((value) => ({ label: value, value })))];
+    default: return [];
+  }
+}
+
+function workflowFields(action: string, target?: ModuleRow, options: Record<string, ModuleOption[]> = {}): FieldSpec[] {
+  if (action === "receive") {
+    let receiveOptions: ModuleOption[] = [];
+    try { receiveOptions = JSON.parse(target?.__remainingOptions ?? "[]") as ModuleOption[]; } catch { receiveOptions = []; }
+    return [field("itemId", "Baris bahan yang diterima", "select", receiveOptions), field("quantity", "Jumlah diterima", "number", undefined, true, 0, "0.001")];
+  }
+  if (action === "quality-check") return [field("inspected", "Jumlah diperiksa", "number", undefined, true, 1, "1"), field("passed", "Lolos QC", "number", undefined, true, 0, "1"), field("rework", "Perlu perbaikan", "number", undefined, true, 0, "1"), field("failed", "Gagal QC", "number", undefined, true, 0, "1")];
+  if (action === "payment") return [field("amount", "Jumlah pembayaran (Rp)", "number", undefined, true, 1, "1")];
+  if (action === "price") return [field("unitPrice", "Harga jual baru (Rp)", "number", undefined, true, 0, "1")];
+  if (action === "edit-user") return [field("fullName", "Nama lengkap"), field("role", "Peran", "select", ["Admin", "Pengadaan", "Gudang", "Produksi", "Penjualan", "Keuangan", "Pemilik"].map((value) => ({ label: value, value }))), field("active", "Status akun", "select", [{ label: "Aktif", value: "true" }, { label: "Nonaktif", value: "false" }])];
+  if (action === "add-bom-item") return [field("productId", "Produk", "select", options.bomProducts), field("materialCode", "Bahan baku", "select", options.bomMaterials), field("quantityPerUnit", "Kebutuhan per produk", "number", undefined, true, 0.001, "0.001")];
+  if (action === "create-supplier") return [field("name", "Nama pemasok"), field("contact", "Kontak", "text", undefined, false), field("address", "Alamat", "textarea", undefined, false)];
+  if (action === "create-material") return [field("code", "Kode bahan"), field("name", "Nama bahan"), field("materialType", "Jenis bahan", "select", ["Kain", "Benang", "Aksesori", "Kemasan", "Lainnya"].map((value) => ({ label: value, value }))), field("unit", "Satuan (contoh: meter, kg, pcs)"), field("unitCost", "HPP per satuan (Rp)", "number", undefined, true, 0, "1"), field("minimumStock", "Stok minimum", "number", undefined, true, 0, "0.001")];
+  if (action === "create-customer") return [field("name", "Nama pelanggan"), field("contact", "Kontak", "text", undefined, false), field("address", "Alamat", "textarea", undefined, false)];
+  return [];
+}
+
+const capabilities: Record<string, string[]> = {
+  products: ["Pemilik", "Produksi"], purchases: ["Pengadaan"], inventory: ["Pemilik", "Gudang"],
+  production: ["Pemilik", "Produksi"], sales: ["Pemilik", "Penjualan", "Gudang", "Keuangan"], finance: ["Pemilik", "Keuangan"], users: ["Pemilik", "Admin"],
+};
+
+export function ModuleView({ moduleKey, definition, initialRows, metrics, options, dataError, userRole }: {
+  moduleKey: string; definition: ModuleDefinition; initialRows: ModuleRow[]; metrics: ModuleDefinition["metrics"];
+  options: Record<string, ModuleOption[]>; dataError: string | null; userRole: string;
+}) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [modalAction, setModalAction] = useState("");
+  const [modalTitle, setModalTitle] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
-  const [detail, setDetail] = useState<ModuleRecord | null>(null);
-  const [toast, setToast] = useState("");
+  const [detail, setDetail] = useState<ModuleRow | null>(null);
+  const [target, setTarget] = useState<ModuleRow | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const createable = capabilities[moduleKey]?.includes(userRole) ?? false;
+  const fields = modalAction === "create" ? formFields(moduleKey, options) : modalAction === "invite" ? formFields("users", options) : workflowFields(modalAction, target ?? undefined, options);
+  const statuses = useMemo(() => Array.from(new Set(initialRows.map((item) => item.__status ?? item.Status).filter((item): item is string => Boolean(item)))), [initialRows]);
+  const filteredRows = useMemo(() => initialRows.filter((item) => {
+    const matchesText = Object.entries(item).some(([key, value]) => !key.startsWith("__") && value.toLowerCase().includes(query.toLowerCase()));
+    const rowStatus = item.__status ?? item.Status;
+    return matchesText && (statusFilter === "all" || rowStatus === statusFilter);
+  }), [initialRows, query, statusFilter]);
 
-  const filteredRows = useMemo(() => rows.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(query.toLowerCase()))), [rows, query]);
-  const fields = definition.columns.slice(0, Math.min(3, definition.columns.length));
+  function openCreate() {
+    setTarget(null); setValues({}); setError(""); setModalAction(moduleKey === "users" ? "invite" : "create");
+    setModalTitle(moduleKey === "users" ? "Undang anggota tim" : definition.action); setModalOpen(true);
+  }
 
-  function addRow(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const newRecord: ModuleRecord = {};
-    definition.columns.forEach((column, index) => { newRecord[column] = values[`field-${index}`]?.trim() || "—"; });
-    if (definition.columns.includes("Status")) newRecord.Status = "Draft";
-    setRows((current) => [newRecord, ...current]);
-    setValues({});
-    setModalOpen(false);
-    setToast("Item ditambahkan ke pratinjau ini.");
-    window.setTimeout(() => setToast(""), 2600);
+  function openWorkflow(action: string, title: string, record?: ModuleRow) {
+    setTarget(record ?? null); setValues({}); setError(""); setModalAction(action); setModalTitle(title); setModalOpen(true);
+    if (action === "price" && record) {
+      const raw = record["Harga jual"].replace(/[^0-9]/g, "");
+      setValues({ unitPrice: raw });
+    }
+    if (action === "edit-user" && record) setValues({ fullName: record["Nama pengguna"], role: record.Peran, active: record.Status === "Aktif" ? "true" : "false" });
+  }
+
+  function openMasterAction(action: string, title: string) {
+    setTarget(null); setValues({}); setError(""); setModalAction(action); setModalTitle(title); setModalOpen(true);
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const payload: Record<string, string | boolean> = { ...values };
+    let endpoint = `/api/modules/${moduleKey}`;
+    if (modalAction === "invite") endpoint = "/api/users/invite";
+    if (modalAction === "create") payload.action = moduleKey === "finance" ? "create-expense" : moduleKey === "inventory" ? "movement" : "create";
+    else payload.action = modalAction === "edit-user" ? "update-profile" : modalAction === "price" ? "update-price" : modalAction;
+    if (target?.__id && !["create", "invite"].includes(modalAction)) payload.id = target.__id;
+    if (target?.__sku && modalAction === "price") payload.sku = target.__sku;
+    if (target?.__userId) payload.id = target.__userId;
+    if (modalAction === "edit-user") payload.active = values.active === "true";
+    if (modalAction === "create" && moduleKey === "inventory") payload.movementType = values.movementType;
+    try {
+      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const result = await response.json() as { error?: string; id?: string };
+      if (!response.ok) throw new Error(result.error || "Penyimpanan gagal.");
+      setModalOpen(false); setDetail(null); setNotice(result.id ? `Berhasil disimpan · ${result.id}` : "Perubahan berhasil disimpan ke Supabase.");
+      router.refresh();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Penyimpanan gagal.");
+    } finally { setBusy(false); }
   }
 
   function exportCsv() {
-    const csv = [definition.columns.join(","), ...filteredRows.map((row) => definition.columns.map((column) => `"${row[column] ?? ""}"`).join(","))].join("\n");
+    const cell = (value: string) => {
+      const protectedValue = /^[\s\u0000-\u001f]*[=+\-@]/.test(value) ? `'${value}` : value;
+      return `"${protectedValue.replaceAll('"', '""')}"`;
+    };
+    const csv = [definition.columns.map(cell).join(","), ...filteredRows.map((item) => definition.columns.map((column) => cell(item[column] ?? "")).join(","))].join("\n");
     const href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const anchor = document.createElement("a");
-    anchor.href = href;
-    anchor.download = `${moduleKey}-vareno.csv`;
-    anchor.click();
-    URL.revokeObjectURL(href);
+    const anchor = document.createElement("a"); anchor.href = href; anchor.download = `${moduleKey}-vareno.csv`; document.body.append(anchor); anchor.click(); anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(href), 1000);
   }
 
+  function actionsFor(record: ModuleRow): WorkflowAction[] {
+    const status = record.__status ?? record.Status ?? record["Status pesanan"] ?? "";
+    const actions: WorkflowAction[] = [];
+    if (moduleKey === "products" && record.__sku && ["Pemilik", "Produksi"].includes(userRole)) actions.push({ action: "price", label: "Ubah harga" });
+    if (moduleKey === "purchases") {
+      if (status === "Menunggu Persetujuan" && userRole === "Pemilik") actions.push({ action: "approve", label: "Setujui pesanan" });
+      if (["Dipesan", "Diterima Sebagian"].includes(status) && ["Gudang", "Pemilik"].includes(userRole) && (record.__remainingOptions ?? "[]") !== "[]") actions.push({ action: "receive", label: "Terima barang" });
+    }
+    if (moduleKey === "production") {
+      if (status === "Direncanakan" && ["Produksi", "Pemilik"].includes(userRole)) actions.push({ action: "status", label: "Mulai produksi" });
+      if (status === "Diproses" && ["Produksi", "Pemilik"].includes(userRole)) actions.push({ action: "status-qc", label: "Kirim ke QC" });
+      if (["Menunggu QC", "Diproses"].includes(status) && ["Produksi", "Pemilik"].includes(userRole)) actions.push({ action: "quality-check", label: "Catat hasil QC" });
+    }
+    if (moduleKey === "sales") {
+      if (["Baru", "Menunggu Pengeluaran Barang", "Terpenuhi Sebagian"].includes(status) && ["Gudang", "Penjualan", "Pemilik"].includes(userRole)) actions.push({ action: "fulfill", label: "Penuhi pesanan" });
+      if (record.Pembayaran !== "Lunas" && ["Penjualan", "Keuangan", "Pemilik"].includes(userRole)) actions.push({ action: "payment", label: "Catat pembayaran" });
+    }
+    if (moduleKey === "finance" && status === "Menunggu Verifikasi" && ["Keuangan", "Pemilik"].includes(userRole)) {
+      actions.push({ action: "verify", label: "Verifikasi" }, { action: "reject", label: "Batalkan transaksi" });
+    }
+    if (moduleKey === "users" && ["Pemilik", "Admin"].includes(userRole)) actions.push({ action: "edit-user", label: "Ubah akses" });
+    return actions;
+  }
+
+  function chooseAction(action: string, record: ModuleRow) {
+    setDetail(record);
+    if (action === "approve" || action === "fulfill" || action === "verify" || action === "reject") {
+      void quickAction(action, record);
+      return;
+    }
+    if (action === "status" || action === "status-qc") {
+      void quickAction(action, record);
+      return;
+    }
+    const title: Record<string, string> = { price: "Ubah harga jual", receive: "Catat penerimaan barang", "quality-check": "Catat hasil QC", payment: "Catat pembayaran", "edit-user": "Ubah profil dan akses" };
+    setDetail(null);
+    openWorkflow(action, title[action] ?? "Perbarui data", record);
+  }
+
+  async function quickAction(action: string, record: ModuleRow) {
+    const id = record.__id ?? "";
+    let body: Record<string, string>;
+    if (action === "status") body = { action: "status", id, status: "Diproses" };
+    else if (action === "status-qc") body = { action: "status", id, status: "Menunggu QC" };
+    else if (action === "reject") body = { action: "verify", id, decision: "Dibatalkan" };
+    else if (action === "verify") body = { action: "verify", id, decision: "Terverifikasi" };
+    else body = { action, id };
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/modules/${moduleKey}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "Aksi gagal disimpan.");
+      setDetail(null); setNotice("Aksi berhasil disimpan ke Supabase."); router.refresh();
+    } catch (actionError) { setError(actionError instanceof Error ? actionError.message : "Aksi gagal disimpan."); }
+    finally { setBusy(false); }
+  }
+
+  const activeActions = detail ? actionsFor(detail) : [];
   return (
     <div className="module-page">
       <div className="page-heading module-heading">
-        <div><div className="eyebrow-row"><span className="eyebrow">{definition.eyebrow}</span><span className="sample-pill">DATA CONTOH</span></div><h1>{definition.title}</h1><p>{definition.description}</p></div>
-        <div className="heading-actions"><button className="secondary-button date-button"><CalendarDays size={16} />Oktober 2026<ChevronDown size={15} /></button><button className="primary-button" onClick={() => setModalOpen(true)}><Plus size={17} />{definition.action}</button></div>
+        <div><div className="eyebrow-row"><span className="eyebrow">{definition.eyebrow}</span><span className="live-pill"><i />DATA SUPABASE</span></div><h1>{definition.title}</h1><p>{definition.description}</p></div>
+        <div className="heading-actions">
+          <button className="secondary-button tool-button" onClick={() => router.refresh()} aria-label="Muat ulang data"><RefreshCw size={15} /><span>Segarkan</span></button>
+          {moduleKey === "products" && ["Pemilik", "Produksi"].includes(userRole) && <button className="secondary-button tool-button" onClick={() => openMasterAction("add-bom-item", "Tambah bahan ke BOM")}><Layers size={15} /><span>Atur BOM</span></button>}
+          {moduleKey === "purchases" && ["Pemilik", "Pengadaan"].includes(userRole) && <><button className="secondary-button tool-button" onClick={() => openMasterAction("create-supplier", "Tambah pemasok")}><Users size={15} /><span>Tambah pemasok</span></button><button className="secondary-button tool-button" onClick={() => openMasterAction("create-material", "Tambah bahan baku")}><Package size={15} /><span>Tambah bahan</span></button></>}
+          {moduleKey === "sales" && ["Pemilik", "Penjualan"].includes(userRole) && <button className="secondary-button tool-button" onClick={() => openMasterAction("create-customer", "Tambah pelanggan")}><Users size={15} /><span>Tambah pelanggan</span></button>}
+          {moduleKey === "reports" || moduleKey === "activity" ? <button className="primary-button" onClick={exportCsv}><Download size={16} />{definition.action}</button> : createable ? <button className="primary-button" onClick={openCreate}><Plus size={17} />{definition.action}</button> : null}
+        </div>
       </div>
       <ModuleVisual moduleKey={moduleKey} />
-      <section className="module-metrics">{definition.metrics.map((metric, index) => <article className="module-metric-card" key={metric.label}><span className={`module-metric-mark mark-${index}`} /> <div><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.note}</small></div></article>)}</section>
+      {dataError && <div className="database-error" role="alert"><strong>Data Supabase belum dapat dimuat.</strong><span>{dataError}</span><Link href="/help#database">Lihat langkah perbaikan di Pusat Bantuan</Link></div>}
+      <section className="module-metrics">{metrics.map((metric, index) => <article className="module-metric-card" key={metric.label}><span className={`module-metric-mark mark-${index}`} /><div><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.note}</small></div></article>)}</section>
       <section className="panel module-table-panel">
-        <div className="module-toolbar"><div><div className="panel-title">Daftar {definition.title.toLowerCase()}</div><div className="panel-subtitle">{filteredRows.length} data ditampilkan</div></div><div className="table-tools"><label className="table-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari data..." aria-label="Cari data" />{query && <button aria-label="Hapus pencarian" onClick={() => setQuery("")}><X size={14} /></button>}</label><button className="secondary-button tool-button" onClick={() => setToast("Filter lanjutan akan mengikuti periode dan hak akses Anda.")}><Filter size={15} /><span>Filter</span></button><button className="secondary-button tool-button export-button" onClick={exportCsv}><Download size={15} /><span>Ekspor</span></button></div></div>
-        <div className="table-scroll"><table className="data-table module-table"><thead><tr>{definition.columns.map((column) => <th key={column}>{column}</th>)}<th aria-label="Aksi" /></tr></thead><tbody>{filteredRows.length ? filteredRows.map((row, index) => <tr key={`${moduleKey}-${index}`} onClick={() => setDetail(row)} className="clickable-row">{definition.columns.map((column, cellIndex) => <td key={column} className={cellIndex === 0 ? "module-primary-cell" : ""}>{column.toLowerCase().includes("status") || ["kondisi", "pembayaran"].includes(column.toLowerCase()) ? <span className={`status-pill ${statusClass(row[column] ?? "")}`}><i />{row[column] ?? "—"}</span> : row[column] ?? "—"}</td>)}<td><button className="row-open-button" aria-label={`Lihat ${row[definition.columns[0]]}`}><ArrowRight size={15} /></button></td></tr>) : <tr><td colSpan={definition.columns.length + 1}><div className="empty-state">Tidak ada data yang cocok. Coba ubah kata pencarian.</div></td></tr>}</tbody></table></div>
-        <div className="table-footer"><span>Menampilkan <strong>{filteredRows.length}</strong> dari <strong>{rows.length}</strong> data</span><div className="pagination"><button disabled aria-label="Halaman sebelumnya">‹</button><button className="page-current">1</button><button onClick={() => setToast("Semua data contoh sudah ditampilkan.")}>2</button><button aria-label="Halaman berikutnya" onClick={() => setToast("Semua data contoh sudah ditampilkan.")}>›</button></div></div>
+        <div className="module-toolbar"><div><div className="panel-title">Daftar {definition.title.toLowerCase()}</div><div className="panel-subtitle">{filteredRows.length} baris dari Supabase</div></div><div className="table-tools"><label className="table-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari data..." aria-label="Cari data" />{query && <button aria-label="Hapus pencarian" onClick={() => setQuery("")}><X size={14} /></button>}</label>{statuses.length > 0 && <label className="table-filter"><Filter size={15} /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter status"><option value="all">Semua status</option>{statuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>}<button className="secondary-button tool-button export-button" onClick={exportCsv}><Download size={15} /><span>Ekspor CSV</span></button></div></div>
+        <div className="table-scroll"><table className="data-table module-table"><thead><tr>{definition.columns.map((column) => <th key={column}>{column}</th>)}<th aria-label="Aksi" /></tr></thead><tbody>{filteredRows.length ? filteredRows.map((record) => <tr key={record.__key} onClick={() => setDetail(record)} className="clickable-row">{definition.columns.map((column, index) => { const value = record[column] ?? "—"; const isStatus = ["status", "kondisi", "pembayaran"].some((word) => column.toLowerCase().includes(word)); return <td key={column} className={index === 0 ? "module-primary-cell" : ""}>{isStatus ? <span className={`status-pill ${statusClass(value)}`}><i />{value}</span> : value}</td>; })}<td><button type="button" className="row-open-button" aria-label={`Lihat ${record[definition.columns[0]]}`} onClick={(event) => { event.stopPropagation(); setDetail(record); }}><ArrowRight size={15} /></button></td></tr>) : <tr><td colSpan={definition.columns.length + 1}><div className="empty-state">{dataError ? "Data belum dapat dimuat. Periksa konfigurasi dan migrasi Supabase." : "Belum ada catatan pada tabel Supabase ini."}</div></td></tr>}</tbody></table></div>
+        <div className="table-footer"><span>Menampilkan <strong>{filteredRows.length}</strong> dari <strong>{initialRows.length}</strong> baris</span><span>Data disimpan di Supabase</span></div>
       </section>
-      <div className="module-footnote"><span className="module-footnote-icon"><SlidersHorizontal size={15} /></span><span>Data terhubung antarbagian untuk menjaga konsistensi transaksi dan persediaan.</span><button onClick={() => setToast("Panduan modul tersedia di Pusat bantuan.")}>Pelajari alur kerja <ArrowRight size={14} /></button></div>
+      <div className="module-footnote"><span className="module-footnote-icon"><SlidersHorizontal size={15} /></span><span>Setiap perubahan operasional disimpan dan dibaca kembali dari Supabase.</span><Link href={`/help#${moduleKey}`}>Pelajari alur kerja <ArrowRight size={14} /></Link></div>
 
-      {modalOpen && <div className="modal-backdrop" role="presentation" onClick={() => setModalOpen(false)}><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">VARENO ERP</span><h2 id="modal-title">{definition.action}</h2></div><button className="icon-button" onClick={() => setModalOpen(false)} aria-label="Tutup dialog"><X size={19} /></button></div><p className="modal-description">Isi informasi awal untuk menambahkan item ke daftar pratinjau.</p><form onSubmit={addRow}><div className="form-grid">{fields.map((field, index) => <label key={field} className="form-field"><span>{field}</span><input autoFocus={index === 0} required={index === 0} placeholder={`Masukkan ${field.toLowerCase()}`} value={values[`field-${index}`] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [`field-${index}`]: event.target.value }))} /></label>)}</div><div className="modal-hint"><CirclePlus size={15} />Perubahan ini tersimpan pada pratinjau antarmuka.</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModalOpen(false)}>Batal</button><button type="submit" className="primary-button">Simpan pratinjau</button></div></form></section></div>}
-      {detail && <div className="modal-backdrop" role="presentation" onClick={() => setDetail(null)}><section className="modal-card detail-card" role="dialog" aria-modal="true" aria-labelledby="detail-title" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">RINCIAN DATA</span><h2 id="detail-title">{detail[definition.columns[0]]}</h2></div><button className="icon-button" onClick={() => setDetail(null)} aria-label="Tutup rincian"><X size={19} /></button></div><div className="detail-list">{definition.columns.map((column) => <div key={column}><span>{column}</span><strong>{detail[column] || "—"}</strong></div>)}</div><div className="modal-actions"><button className="secondary-button" onClick={() => setDetail(null)}>Tutup</button><button className="primary-button" onClick={() => { setDetail(null); setToast("Rincian berhasil dibuka."); }}>Selesai <ArrowRight size={15} /></button></div></section></div>}
-      {toast && <div className="toast-message" role="status">{toast}<button onClick={() => setToast("")} aria-label="Tutup">×</button></div>}
+      {modalOpen && <div className="modal-backdrop" role="presentation" onClick={() => !busy && setModalOpen(false)}><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">VARENO ERP · SUPABASE</span><h2 id="modal-title">{modalTitle}</h2></div><button className="icon-button" onClick={() => setModalOpen(false)} aria-label="Tutup dialog"><X size={19} /></button></div><p className="modal-description">Data akan divalidasi oleh hak akses dan aturan database sebelum disimpan.</p><form onSubmit={save}><div className="form-grid">{fields.map((item, index) => <label key={item.key} className="form-field"><span>{item.label}</span>{item.type === "select" ? <select autoFocus={index === 0} required={item.required !== false} value={values[item.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [item.key]: event.target.value }))}><option value="">Pilih {item.label.toLowerCase()}</option>{(item.options ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : item.type === "textarea" ? <textarea autoFocus={index === 0} required={item.required !== false} placeholder={`Masukkan ${item.label.toLowerCase()}`} value={values[item.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [item.key]: event.target.value }))} /> : <input autoFocus={index === 0} type={item.type ?? "text"} min={item.min} step={item.step} required={item.required !== false} placeholder={item.type === "number" ? "0" : `Masukkan ${item.label.toLowerCase()}`} value={values[item.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [item.key]: event.target.value }))} />}</label>)}</div>{error && <div className="login-error" role="alert">{error}</div>}<div className="modal-hint"><CirclePlus size={15} />Perubahan akan tersimpan langsung ke Supabase.</div><div className="modal-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setModalOpen(false)}>Batal</button><button type="submit" className="primary-button" disabled={busy}>{busy ? "Menyimpan..." : "Simpan ke Supabase"}</button></div></form></section></div>}
+      {detail && <div className="modal-backdrop" role="presentation" onClick={() => setDetail(null)}><section className="modal-card detail-card" role="dialog" aria-modal="true" aria-labelledby="detail-title" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">RINCIAN DARI DATABASE</span><h2 id="detail-title">{detail[definition.columns[0]]}</h2></div><button className="icon-button" onClick={() => setDetail(null)} aria-label="Tutup rincian"><X size={19} /></button></div><div className="detail-list">{definition.columns.map((column) => <div key={column}><span>{column}</span><strong>{detail[column] || "—"}</strong></div>)}</div>{error && <div className="login-error" role="alert">{error}</div>}{activeActions.length > 0 && <div className="workflow-actions">{activeActions.map((item) => <button key={item.action} className={item.action === "reject" ? "secondary-button danger-button" : "secondary-button"} disabled={busy} onClick={() => chooseAction(item.action, detail)}>{item.label}</button>)}</div>}<div className="modal-actions"><button className="secondary-button" onClick={() => setDetail(null)}>Tutup</button></div></section></div>}
+      {notice && <div className="toast-message" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Tutup">×</button></div>}
     </div>
   );
 }
