@@ -20,7 +20,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ mo
   try { body = await request.json() as Payload; } catch { return fail("Isi permintaan tidak valid."); }
   const action = text(body, "action");
   const role = profile.role;
-  const can = (...roles: string[]) => roles.includes(role);
+  const can = (...roles: string[]) => role === "Admin" || roles.includes(role);
 
   try {
     if (module === "products" && action === "add-bom-item") {

@@ -7,6 +7,7 @@ import {
   CircleAlert, ClipboardCheck, Factory, ShoppingCart, Sparkles, TrendingUp,
 } from "lucide-react";
 import type { DashboardSnapshot } from "@/lib/dashboard-data";
+import { formatCompactNumber, formatRupiah } from "@/lib/formatters";
 
 const initialsTone: Record<string, string> = { lavender: "lavender", peach: "peach", mint: "mint", blue: "blue", rose: "rose" };
 
@@ -63,7 +64,7 @@ function Chart({ values, labels }: { values: number[]; labels: string[] }) {
   const area = `${line} L${points[points.length - 1]?.x ?? 0},${dimensions.height - dimensions.bottom} L${points[0]?.x ?? 0},${dimensions.height - dimensions.bottom} Z`;
   return (
     <div className="chart-wrap">
-      <div className="chart-y-labels">{[1, .75, .5, .25, 0].map((ratio) => <span key={ratio}>{ratio === 0 ? "Rp0" : `Rp${new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 0 }).format(scaleMax * ratio)}`}</span>)}</div>
+      <div className="chart-y-labels">{[1, .75, .5, .25, 0].map((ratio) => <span key={ratio}>{ratio === 0 ? "Rp0" : `Rp${formatCompactNumber(scaleMax * ratio)}`}</span>)}</div>
       <div className="chart-plot">
         <svg viewBox={`0 0 ${dimensions.width} ${dimensions.height}`} role="img" aria-label="Grafik tren penjualan VARENO">
           <defs><linearGradient id="sales-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#8f72ec" stopOpacity=".18" /><stop offset="100%" stopColor="#8f72ec" stopOpacity="0" /></linearGradient></defs>
@@ -76,7 +77,7 @@ function Chart({ values, labels }: { values: number[]; labels: string[] }) {
           {points.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r={index === points.length - 1 ? 5 : 3.5} className={index === points.length - 1 ? "chart-point current" : "chart-point"} />)}
         </svg>
         <div className="chart-x-labels">{labels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
-        <div className="chart-tooltip"><span>{labels[labels.length - 1] ?? "Periode terbaru"}</span><strong>{new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(values[values.length - 1] ?? 0)}</strong><small>penjualan tercatat pada bulan ini</small></div>
+        <div className="chart-tooltip"><span>{labels[labels.length - 1] ?? "Periode terbaru"}</span><strong>{formatRupiah(values[values.length - 1] ?? 0)}</strong><small>penjualan tercatat pada bulan ini</small></div>
       </div>
     </div>
   );

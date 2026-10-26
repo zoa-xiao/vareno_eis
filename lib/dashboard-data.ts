@@ -1,4 +1,5 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getCurrentAuthContext } from "@/lib/supabase/user-context";
+import { formatRupiah } from "@/lib/formatters";
 
 export type DashboardMetric = { label: string; value: string; change: string; direction: "up" | "down"; note: string };
 export type DashboardSale = { id: string; customer: string; product: string; date: string; amount: string; status: "Selesai" | "Diproses" | "Menunggu pembayaran"; initials: string; tone: string };
@@ -18,12 +19,13 @@ export type DashboardSnapshot = {
   readAccess: { sales: boolean; stock: boolean; production: boolean; purchases: boolean };
 };
 
-const money = (amount: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(amount);
+const money = formatRupiah;
 const idDate = (value: string | Date) => new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Makassar" }).format(new Date(value));
-const roleCanReadSales = (role: string) => ["Pemilik", "Gudang", "Penjualan", "Keuangan"].includes(role);
-const roleCanReadStock = (role: string) => ["Pemilik", "Pengadaan", "Gudang", "Produksi", "Penjualan", "Keuangan"].includes(role);
-const roleCanReadProduction = (role: string) => ["Pemilik", "Produksi", "Gudang", "Keuangan"].includes(role);
-const roleCanReadPurchases = (role: string) => ["Pemilik", "Pengadaan", "Gudang", "Keuangan"].includes(role);
+const firstRelation = <T,>(value: T | T[] | null | undefined): T | undefined => Array.isArray(value) ? value[0] : value ?? undefined;
+const roleCanReadSales = (role: string) => ["Pemilik", "Admin", "Gudang", "Penjualan", "Keuangan"].includes(role);
+const roleCanReadStock = (role: string) => ["Pemilik", "Admin", "Pengadaan", "Gudang", "Produksi", "Penjualan", "Keuangan"].includes(role);
+const roleCanReadProduction = (role: string) => ["Pemilik", "Admin", "Produksi", "Gudang", "Keuangan"].includes(role);
+const roleCanReadPurchases = (role: string) => ["Pemilik", "Admin", "Pengadaan", "Gudang", "Keuangan"].includes(role);
 
 function emptySnapshot(error: string | null, greetingName = "") : DashboardSnapshot {
   return {
@@ -40,14 +42,10 @@ function emptySnapshot(error: string | null, greetingName = "") : DashboardSnaps
 }
 
 export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
-  const supabase = await createSupabaseServerClient();
-  if (!supabase) return emptySnapshot("Konfigurasi Supabase belum tersedia di server.");
-
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return emptySnapshot("Sesi login Supabase tidak ditemukan.");
-  const { data: profile, error: profileError } = await supabase.from("profiles").select("full_name,role,active").eq("id", user.id).maybeSingle();
-  if (profileError || !profile?.active || !profile.role) return emptySnapshot(profileError?.message ?? "Profil aktif tidak ditemukan.");
-  const greetingName = profile.full_name || user.user_metadata?.full_name || user.email?.split("@")[0] || "Pengguna";
+  const { supabase, claims, profilePromise, error: contextError } = await getCurrentAuthContext();
+  if (!supabase) return emptySnapshot(contextError);
+  if (!claims) return emptySnapshot(contextError ?? "Sesi login Supabase tidak ditemukan.");
+  if (!profilePromise) return emptySnapshot(contextError ?? "Profil aktif tidak ditemukan.");
 
   const now = new Date();
   const currentYear = now.getUTCFullYear();
@@ -55,16 +53,26 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   const chartStart = new Date(Date.UTC(currentYear, currentMonth - 11, 1));
   const currentStart = new Date(Date.UTC(currentYear, currentMonth, 1));
   const priorStart = new Date(Date.UTC(currentYear, currentMonth - 1, 1));
+  const [profileResult, salesResult, stockResult, productionResult, approvalsResult] = await Promise.all([
+    profilePromise,
+    supabase.from("sales").select("id,customer_name,total,status,payment_status,created_at,sale_items(quantity,sku,unit_price,discount,product_variants(unit_cost,products(product_categories(name))))").gte("created_at", chartStart.toISOString()).neq("status", "Dibatalkan").order("created_at", { ascending: false }).limit(3000),
+    supabase.from("stock_balances").select("item_type,item_code,item_name,quantity,minimum_stock,unit_cost"),
+    supabase.from("production_orders").select("id,status,result_quantity,planned_quantity").in("status", ["Direncanakan", "Diproses", "Menunggu QC", "Selesai QC"]),
+    supabase.from("purchase_orders").select("id").eq("status", "Menunggu Persetujuan"),
+  ]);
+  const { data: profile, error: profileError } = profileResult;
+  if (profileError || !profile?.active || !profile.role) return emptySnapshot(profileError?.message ?? "Profil aktif tidak ditemukan.");
+  const { data: sales, error: salesError } = salesResult;
+  const { data: stock, error: stockError } = stockResult;
+  const { data: production, error: productionError } = productionResult;
+  const { data: approvals, error: approvalsError } = approvalsResult;
+  const metadata = claims.user_metadata;
+  const email = typeof claims.email === "string" ? claims.email : "";
+  const greetingName = profile.full_name || (typeof metadata?.full_name === "string" ? metadata.full_name : "") || email.split("@")[0] || "Pengguna";
   const readAccess = {
     sales: roleCanReadSales(profile.role), stock: roleCanReadStock(profile.role),
     production: roleCanReadProduction(profile.role), purchases: roleCanReadPurchases(profile.role),
   };
-  const [{ data: sales, error: salesError }, { data: stock, error: stockError }, { data: production, error: productionError }, { data: approvals, error: approvalsError }] = await Promise.all([
-    roleCanReadSales(profile.role) ? supabase.from("sales").select("id,customer_name,total,status,payment_status,created_at").gte("created_at", chartStart.toISOString()).neq("status", "Dibatalkan").order("created_at", { ascending: false }).limit(3000) : Promise.resolve({ data: [], error: null }),
-    roleCanReadStock(profile.role) ? supabase.from("stock_balances").select("item_type,item_code,item_name,quantity,minimum_stock,unit_cost") : Promise.resolve({ data: [], error: null }),
-    roleCanReadProduction(profile.role) ? supabase.from("production_orders").select("id,status,result_quantity,planned_quantity").in("status", ["Direncanakan", "Diproses", "Menunggu QC", "Selesai QC"]) : Promise.resolve({ data: [], error: null }),
-    roleCanReadPurchases(profile.role) ? supabase.from("purchase_orders").select("id").eq("status", "Menunggu Persetujuan") : Promise.resolve({ data: [], error: null }),
-  ]);
   const queryError = salesError ?? stockError ?? productionError ?? approvalsError;
   if (queryError) return emptySnapshot(queryError.message, greetingName);
 
@@ -91,23 +99,16 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   let grossProfit = 0;
   const categorySales = new Map<string, { amount: number; quantity: number }>();
   if (salesRows.length && roleCanReadSales(profile.role)) {
-    const { data: saleItems, error: itemError } = await supabase.from("sale_items").select("sale_id,sku,quantity,unit_price,discount").in("sale_id", salesRows.map((sale) => sale.id));
-    if (itemError) return emptySnapshot(itemError.message, greetingName);
-    const items = saleItems ?? [];
-    const skus = Array.from(new Set(items.map((item) => item.sku)));
-    const { data: variants, error: variantError } = skus.length ? await supabase.from("product_variants").select("sku,unit_cost,products(product_categories(name))").in("sku", skus) : { data: [], error: null };
-    if (variantError) return emptySnapshot(variantError.message, greetingName);
-    const variantMap = new Map((variants ?? []).map((variant) => [variant.sku, variant]));
     const saleMap = new Map(salesRows.map((sale) => [sale.id, sale]));
-    for (const item of items) {
-      const variant = variantMap.get(item.sku);
+    for (const sale of salesRows) for (const item of sale.sale_items ?? []) {
+      const variant = firstRelation(item.product_variants);
       const qty = Number(item.quantity ?? 0);
       const lineRevenue = Number(item.unit_price ?? 0) * qty - Number(item.discount ?? 0);
       grossProfit += lineRevenue - Number(variant?.unit_cost ?? 0) * qty;
-      const sale = saleMap.get(item.sale_id);
-      if (!sale || sale.status === "Dibatalkan") continue;
-      const product = variant?.products as unknown as { product_categories?: { name?: string } | { name?: string }[] } | null;
-      const categoryRelation = Array.isArray(product?.product_categories) ? product.product_categories[0] : product?.product_categories;
+      const matchingSale = saleMap.get(sale.id);
+      if (!matchingSale || matchingSale.status === "Dibatalkan") continue;
+      const productRecord = firstRelation(variant?.products);
+      const categoryRelation = firstRelation(productRecord?.product_categories);
       const name = categoryRelation?.name ?? "Tanpa kategori";
       const previous = categorySales.get(name) ?? { amount: 0, quantity: 0 };
       previous.amount += lineRevenue; previous.quantity += qty; categorySales.set(name, previous);

@@ -1,5 +1,6 @@
 import type { ModuleDefinition } from "@/lib/erp-data";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { formatRupiah } from "@/lib/formatters";
+import { getCurrentAuthContext } from "@/lib/supabase/user-context";
 
 export type ModuleRow = Record<string, string> & { __key: string; __sku?: string; __status?: string; __id?: string; __userId?: string; __remainingOptions?: string };
 export type ModuleOption = { label: string; value: string; kind?: string; unit?: string; cost?: number; minimum?: number };
@@ -17,7 +18,7 @@ const records = (value: unknown): DbRow[] => Array.isArray(value) ? value.map(re
 const related = (value: unknown): DbRow => Array.isArray(value) ? record(value[0]) : record(value);
 const str = (value: unknown, fallback = "—") => value === null || value === undefined || value === "" ? fallback : String(value);
 const num = (value: unknown) => Number(value ?? 0);
-const rupiah = (value: unknown) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(num(value));
+const rupiah = (value: unknown) => formatRupiah(num(value));
 const date = (value: unknown) => value ? new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(String(value))) : "—";
 const pct = (value: number) => `${value.toLocaleString("id-ID", { maximumFractionDigits: 1 })}%`;
 const row = (key: string, values: Record<string, string>, meta: Partial<ModuleRow> = {}): ModuleRow => ({ __key: key, ...values, ...meta });
@@ -31,23 +32,27 @@ function failed(definition: ModuleDefinition, error: string, role = ""): ModuleP
 }
 
 export async function getModulePageData(moduleKey: string, definition: ModuleDefinition): Promise<ModulePageData> {
-  const supabase = await createSupabaseServerClient();
-  if (!supabase) return failed(definition, "Konfigurasi Supabase belum tersedia di server.");
+  const { supabase, claims, profilePromise, error: contextError } = await getCurrentAuthContext();
+  if (!supabase) return failed(definition, contextError ?? "Konfigurasi Supabase belum tersedia di server.");
 
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return failed(definition, "Sesi login berakhir. Silakan masuk kembali.");
-    const { data: profile, error: profileError } = await supabase.from("profiles").select("role,active").eq("id", user.id).maybeSingle();
-    if (profileError) return failed(definition, profileError.message);
-    if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
-    const role = profile.role;
+    if (!claims) return failed(definition, contextError ?? "Sesi login berakhir. Silakan masuk kembali.");
+    if (!profilePromise) return failed(definition, contextError ?? "Profil aktif dengan hak akses belum tersedia.");
     if (moduleKey === "products") {
-      const [productsResult, stockResult, bomCountResult] = await Promise.all([
+      const [profileResult, productsResult, stockResult, bomCountResult, categoriesResult, bomProductsResult, materialsResult] = await Promise.all([
+        profilePromise,
         supabase.from("products").select("id,name,model,active,product_categories(name),product_variants(sku,variant_name,size,color,unit_price,unit_cost,minimum_stock,active)").order("created_at", { ascending: false }),
         supabase.from("stock_balances").select("item_code,quantity").eq("item_type", "produk_jadi"),
         supabase.from("bills_of_materials").select("id", { count: "exact", head: true }).eq("active", true),
+        supabase.from("product_categories").select("id,name").order("name"),
+        supabase.from("products").select("id,name,model").eq("active", true).order("name"),
+        supabase.from("raw_materials").select("code,name,unit").eq("active", true).order("name"),
       ]);
-      const error = productsResult.error ?? stockResult.error ?? bomCountResult.error;
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
+      const error = productsResult.error ?? stockResult.error ?? bomCountResult.error ?? categoriesResult.error ?? bomProductsResult.error ?? materialsResult.error;
       if (error) return failed(definition, error.message, role);
       const stockBySku = new Map(records(stockResult.data).map((item) => [str(item.item_code), num(item.quantity)]));
       const products = records(productsResult.data);
@@ -62,13 +67,6 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
       });
       const activeProducts = products.filter((item) => item.active).length;
       const skuCount = products.reduce((sum, item) => sum + records(item.product_variants).filter((variant) => variant.active).length, 0);
-      const [categoriesResult, bomProductsResult, materialsResult] = await Promise.all([
-        supabase.from("product_categories").select("id,name").order("name"),
-        supabase.from("products").select("id,name,model").eq("active", true).order("name"),
-        supabase.from("raw_materials").select("code,name,unit").eq("active", true).order("name"),
-      ]);
-      const setupError = categoriesResult.error ?? bomProductsResult.error ?? materialsResult.error;
-      if (setupError) return failed(definition, setupError.message, role);
       return { rows, options: {
         categories: records(categoriesResult.data).map((item) => ({ label: str(item.name), value: str(item.name) })),
         bomProducts: records(bomProductsResult.data).map((item) => ({ label: `${str(item.name)} · ${str(item.model)}`, value: str(item.id) })),
@@ -78,11 +76,16 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "purchases") {
-      const [ordersResult, suppliersResult, materialsResult] = await Promise.all([
+      const [profileResult, ordersResult, suppliersResult, materialsResult] = await Promise.all([
+        profilePromise,
         supabase.from("purchase_orders").select("id,supplier_name,order_date,total,status,purchase_order_items(id,material_code,quantity,unit_price,received_quantity,raw_materials(name,unit))").order("created_at", { ascending: false }),
         supabase.from("suppliers").select("id,name").eq("active", true).order("name"),
         supabase.from("raw_materials").select("code,name,unit,unit_cost").eq("active", true).order("name"),
       ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
       const error = ordersResult.error ?? suppliersResult.error ?? materialsResult.error;
       if (error) return failed(definition, error.message, role);
       const orders = records(ordersResult.data);
@@ -104,11 +107,16 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "inventory") {
-      const [stockResult, materialsResult, variantsResult] = await Promise.all([
+      const [profileResult, stockResult, materialsResult, variantsResult] = await Promise.all([
+        profilePromise,
         supabase.from("stock_balances").select("item_type,item_code,item_name,quantity,minimum_stock,unit_cost").order("item_name"),
         supabase.from("raw_materials").select("code,name,unit,unit_cost,minimum_stock").eq("active", true).order("name"),
         supabase.from("product_variants").select("sku,variant_name,unit_cost,minimum_stock,products(name)").eq("active", true).order("sku"),
       ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
       const error = stockResult.error ?? materialsResult.error ?? variantsResult.error;
       if (error) return failed(definition, error.message, role);
       const stock = records(stockResult.data);
@@ -133,10 +141,15 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "production") {
-      const [ordersResult, variantsResult] = await Promise.all([
+      const [profileResult, ordersResult, variantsResult] = await Promise.all([
+        profilePromise,
         supabase.from("production_orders").select("id,sku,variant_name,planned_quantity,result_quantity,status,target_date,quality_checks(inspected_quantity,passed_quantity,rework_quantity,failed_quantity)").order("created_at", { ascending: false }),
         supabase.from("product_variants").select("sku,variant_name,products(name)").eq("active", true).order("sku"),
       ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
       const error = ordersResult.error ?? variantsResult.error;
       if (error) return failed(definition, error.message, role);
       const orders = records(ordersResult.data);
@@ -154,11 +167,16 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "sales") {
-      const [salesResult, customersResult, variantsResult] = await Promise.all([
+      const [profileResult, salesResult, customersResult, variantsResult] = await Promise.all([
+        profilePromise,
         supabase.from("sales").select("id,customer_id,customer_name,total,status,payment_status,created_at,sale_items(quantity,sku)").order("created_at", { ascending: false }),
         supabase.from("customers").select("id,name").order("name"),
         supabase.from("product_variants").select("sku,variant_name,unit_price,products(name)").eq("active", true).order("sku"),
       ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
       const error = salesResult.error ?? customersResult.error ?? variantsResult.error;
       if (error) return failed(definition, error.message, role);
       const sales = records(salesResult.data);
@@ -175,10 +193,15 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "finance") {
-      const [expensesResult, transactionsResult] = await Promise.all([
+      const [profileResult, expensesResult, transactionsResult] = await Promise.all([
+        profilePromise,
         supabase.from("operating_expenses").select("id,expense_type,amount,description,transaction_date").order("transaction_date", { ascending: false }),
         supabase.from("financial_transactions").select("id,direction,amount,source_type,source_id,status,transaction_date").order("transaction_date", { ascending: false }),
       ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
       const error = expensesResult.error ?? transactionsResult.error;
       if (error) return failed(definition, error.message, role);
       const transactions = records(transactionsResult.data);
@@ -198,12 +221,17 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "reports") {
-      const [salesResult, stockResult, productionResult, financeResult] = await Promise.all([
+      const [profileResult, salesResult, stockResult, productionResult, financeResult] = await Promise.all([
+        profilePromise,
         supabase.from("sales").select("total,status,payment_status,created_at"),
         supabase.from("stock_balances").select("item_type,item_code,item_name,quantity,minimum_stock,unit_cost"),
         supabase.from("production_orders").select("id,status,planned_quantity,result_quantity,target_date"),
         supabase.from("financial_transactions").select("direction,amount,status"),
       ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
       const error = salesResult.error ?? stockResult.error ?? productionResult.error ?? financeResult.error;
       if (error) return failed(definition, error.message, role);
       const sales = records(salesResult.data); const stock = records(stockResult.data); const production = records(productionResult.data); const finance = records(financeResult.data);
@@ -227,7 +255,15 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "users") {
-      const { data, error } = await supabase.from("profiles").select("id,email,full_name,role,active,created_at").order("full_name");
+      const [profileResult, usersResult] = await Promise.all([
+        profilePromise,
+        supabase.from("profiles").select("id,email,full_name,role,active,created_at").order("full_name"),
+      ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
+      const { data, error } = usersResult;
       if (error) return failed(definition, error.message, role);
       const profiles = records(data);
       return { rows: profiles.map((item) => row(str(item.id), { "Nama pengguna": str(item.full_name), Email: str(item.email), Peran: str(item.role), "Aktivitas terakhir": date(item.created_at), Status: item.active ? "Aktif" : "Nonaktif" }, { __userId: str(item.id), __status: item.active ? "Aktif" : "Nonaktif" })), options: {}, error: null, role,
@@ -235,13 +271,21 @@ export async function getModulePageData(moduleKey: string, definition: ModuleDef
     }
 
     if (moduleKey === "activity") {
-      const { data, error } = await supabase.from("audit_logs").select("id,module,action,document_id,created_at,profiles(full_name)").order("created_at", { ascending: false }).limit(500);
+      const [profileResult, activityResult] = await Promise.all([
+        profilePromise,
+        supabase.from("audit_logs").select("id,module,action,document_id,created_at,profiles(full_name)").order("created_at", { ascending: false }).limit(500),
+      ]);
+      const { data: profile, error: profileError } = profileResult;
+      if (profileError) return failed(definition, profileError.message);
+      if (!profile?.active || !profile.role) return failed(definition, "Profil aktif dengan hak akses belum tersedia.");
+      const role = profile.role;
+      const { data, error } = activityResult;
       if (error) return failed(definition, error.message, role);
       const logs = records(data);
       return { rows: logs.map((item) => row(str(item.id), { Pengguna: str(related(item.profiles).full_name), Aktivitas: str(item.action), Modul: str(item.module), Dokumen: str(item.document_id), Waktu: date(item.created_at) })), options: {}, error: null, role,
         metrics: [{ label: "Aktivitas tercatat", value: String(logs.length), note: "maksimal 500 terbaru" }, { label: "Modul", value: String(new Set(logs.map((item) => str(item.module))).size), note: "berdasarkan log" }, { label: "Pembaruan terakhir", value: logs.length ? date(logs[0].created_at) : "—", note: "waktu Supabase" }] };
     }
-    return failed(definition, "Modul belum memiliki pemetaan data Supabase.", role);
+    return failed(definition, "Modul belum memiliki pemetaan data Supabase.");
   } catch (error) {
     return failed(definition, error instanceof Error ? error.message : "Tidak dapat memuat data Supabase.");
   }

@@ -14,21 +14,27 @@ create table if not exists public.support_tickets (
   updated_at timestamptz not null default now()
 );
 alter table public.support_tickets enable row level security;
+drop policy if exists "users read own support tickets" on public.support_tickets;
 create policy "users read own support tickets" on public.support_tickets for select to authenticated
   using (requester_id = auth.uid() or public.has_role(array['Pemilik', 'Admin']));
+drop policy if exists "users create own support tickets" on public.support_tickets;
 create policy "users create own support tickets" on public.support_tickets for insert to authenticated
   with check (requester_id = auth.uid() and status = 'Baru');
+drop policy if exists "admins manage support ticket status" on public.support_tickets;
 create policy "admins manage support ticket status" on public.support_tickets for update to authenticated
   using (public.has_role(array['Pemilik', 'Admin'])) with check (public.has_role(array['Pemilik', 'Admin']));
 grant select, insert, update on public.support_tickets to authenticated;
 
 drop policy if exists "procurement manages suppliers" on public.suppliers;
+drop policy if exists "procurement and owner manage suppliers" on public.suppliers;
 create policy "procurement and owner manage suppliers" on public.suppliers for all to authenticated
   using (public.has_role(array['Pengadaan', 'Pemilik'])) with check (public.has_role(array['Pengadaan', 'Pemilik']));
 drop policy if exists "sales manages customers" on public.customers;
+drop policy if exists "sales and owner manage customers" on public.customers;
 create policy "sales and owner manage customers" on public.customers for all to authenticated
   using (public.has_role(array['Penjualan', 'Pemilik'])) with check (public.has_role(array['Penjualan', 'Pemilik']));
 drop policy if exists "warehouse records stock movements" on public.stock_movements;
+drop policy if exists "warehouse and owner record stock movements" on public.stock_movements;
 create policy "warehouse and owner record stock movements" on public.stock_movements for insert to authenticated
   with check (public.has_role(array['Gudang', 'Pemilik']) and created_by = auth.uid());
 
@@ -169,14 +175,14 @@ end; $$;
 
 create or replace function public.update_user_profile(p_target_id uuid, p_full_name text, p_role text, p_active boolean)
 returns void language plpgsql security definer set search_path = public as $$
-declare current_role text; old_profile public.profiles; target_role text := nullif(trim(coalesce(p_role, '')), ''); target_name text := nullif(trim(coalesce(p_full_name, '')), '');
+declare actor_role text; old_profile public.profiles; target_role text := nullif(trim(coalesce(p_role, '')), ''); target_name text := nullif(trim(coalesce(p_full_name, '')), '');
 begin
-  current_role := public.current_user_role();
-  if current_role is null or current_role not in ('Pemilik', 'Admin') then raise exception 'Hanya Pemilik atau Admin yang dapat mengubah profil'; end if;
+  actor_role := public.current_user_role();
+  if actor_role is null or actor_role not in ('Pemilik', 'Admin') then raise exception 'Hanya Pemilik atau Admin yang dapat mengubah profil'; end if;
   select * into old_profile from public.profiles where id = p_target_id for update;
   if not found then raise exception 'Profil pengguna tidak ditemukan'; end if;
-  if current_role = 'Admin' and (p_target_id = auth.uid() or old_profile.role = 'Pemilik' or target_role = 'Pemilik') then raise exception 'Admin tidak dapat mengubah akses akun sendiri atau akun Pemilik'; end if;
-  if p_target_id = auth.uid() and current_role = 'Pemilik' and ((target_role is not null and target_role <> 'Pemilik') or p_active = false) then raise exception 'Pemilik tidak dapat menonaktifkan atau menurunkan hak akses akunnya sendiri'; end if;
+  if actor_role = 'Admin' and (p_target_id = auth.uid() or old_profile.role = 'Pemilik' or target_role = 'Pemilik') then raise exception 'Admin tidak dapat mengubah akses akun sendiri atau akun Pemilik'; end if;
+  if p_target_id = auth.uid() and actor_role = 'Pemilik' and ((target_role is not null and target_role <> 'Pemilik') or p_active = false) then raise exception 'Pemilik tidak dapat menonaktifkan atau menurunkan hak akses akunnya sendiri'; end if;
   if target_role is not null and target_role not in ('Pemilik', 'Admin', 'Pengadaan', 'Gudang', 'Produksi', 'Penjualan', 'Keuangan') then raise exception 'Peran tidak dikenal'; end if;
   update public.profiles set full_name = coalesce(target_name, full_name), role = coalesce(target_role, role), active = coalesce(p_active, active) where id = p_target_id;
   insert into public.audit_logs(user_id, module, action, document_id, old_value, new_value)

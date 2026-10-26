@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail, Sparkles } from "lucide-react";
 import { createSupabaseBrowserClient, hasSupabaseConfig } from "@/lib/supabase/client";
 
 function Brand() {
@@ -38,6 +38,47 @@ export default function LoginPage() {
       router.refresh();
     } catch {
       setError("Supabase tidak dapat dijangkau. Periksa koneksi internet dan konfigurasi proyek.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function demoLogin() {
+    setError("");
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) {
+      setError("Supabase belum dikonfigurasi. Isi variabel koneksi Supabase di .env.local.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      let demoUser = session?.user.is_anonymous ? session.user : null;
+      if (!demoUser) {
+        const { data, error: authError } = await supabase.auth.signInAnonymously();
+        if (authError) {
+          const message = authError.message.toLowerCase();
+          setError(message.includes("anonymous") || message.includes("disabled")
+            ? "Aktifkan Anonymous Sign-ins di pengaturan Authentication Supabase, lalu jalankan migration demo yang disediakan."
+            : `Login demo Supabase gagal: ${authError.message}`);
+          return;
+        }
+        demoUser = data.user;
+      }
+      if (!demoUser) {
+        setError("Supabase tidak mengembalikan sesi demo. Silakan coba lagi.");
+        return;
+      }
+      const { data: profile, error: profileError } = await supabase.from("profiles").select("role,active").eq("id", demoUser.id).maybeSingle();
+      if (profileError || !profile?.active || profile.role !== "Admin") {
+        await supabase.auth.signOut();
+        setError("Akses demo belum disiapkan. Jalankan migration demo Supabase, lalu coba lagi.");
+        return;
+      }
+      router.replace("/");
+      router.refresh();
+    } catch {
+      setError("Supabase tidak dapat dijangkau. Periksa koneksi proyek Anda.");
     } finally {
       setLoading(false);
     }
@@ -109,6 +150,10 @@ export default function LoginPage() {
             <div className="login-options"><span /><button type="button" onClick={resetPassword} disabled={loading}>Lupa kata sandi?</button></div>
             {error && <div className="login-error" role="alert">{error}</div>}
             <button type="submit" className="primary-button login-submit" disabled={loading || !configured}>{loading ? "Memeriksa akun..." : "Masuk ke dashboard"}<ArrowRight size={17} /></button>
+            <div className="login-demo-divider"><span />atau<span /></div>
+            <button type="button" className="login-demo-button" onClick={demoLogin} disabled={loading || !configured}>
+              <Sparkles size={16} />{loading ? "Menyiapkan demo..." : "Masuk demo"}
+            </button>
           </form>
           <div className="login-security"><span className="secure-dot" /> Autentikasi dan data diambil dari Supabase</div>
         </div>

@@ -214,8 +214,8 @@ function workflowFields(action: string, target?: ModuleRow, options: Record<stri
 }
 
 const capabilities: Record<string, string[]> = {
-  products: ["Pemilik", "Produksi"], purchases: ["Pengadaan"], inventory: ["Pemilik", "Gudang"],
-  production: ["Pemilik", "Produksi"], sales: ["Pemilik", "Penjualan", "Gudang", "Keuangan"], finance: ["Pemilik", "Keuangan"], users: ["Pemilik", "Admin"],
+  products: ["Pemilik", "Admin", "Produksi"], purchases: ["Admin", "Pengadaan"], inventory: ["Pemilik", "Admin", "Gudang"],
+  production: ["Pemilik", "Admin", "Produksi"], sales: ["Pemilik", "Admin", "Penjualan", "Gudang", "Keuangan"], finance: ["Pemilik", "Admin", "Keuangan"], users: ["Pemilik", "Admin"],
 };
 
 export function ModuleView({ moduleKey, definition, initialRows, metrics, options, dataError, userRole }: {
@@ -298,21 +298,21 @@ export function ModuleView({ moduleKey, definition, initialRows, metrics, option
   function actionsFor(record: ModuleRow): WorkflowAction[] {
     const status = record.__status ?? record.Status ?? record["Status pesanan"] ?? "";
     const actions: WorkflowAction[] = [];
-    if (moduleKey === "products" && record.__sku && ["Pemilik", "Produksi"].includes(userRole)) actions.push({ action: "price", label: "Ubah harga" });
+    if (moduleKey === "products" && record.__sku && ["Pemilik", "Admin", "Produksi"].includes(userRole)) actions.push({ action: "price", label: "Ubah harga" });
     if (moduleKey === "purchases") {
-      if (status === "Menunggu Persetujuan" && userRole === "Pemilik") actions.push({ action: "approve", label: "Setujui pesanan" });
-      if (["Dipesan", "Diterima Sebagian"].includes(status) && ["Gudang", "Pemilik"].includes(userRole) && (record.__remainingOptions ?? "[]") !== "[]") actions.push({ action: "receive", label: "Terima barang" });
+      if (status === "Menunggu Persetujuan" && ["Pemilik", "Admin"].includes(userRole)) actions.push({ action: "approve", label: "Setujui pesanan" });
+      if (["Dipesan", "Diterima Sebagian"].includes(status) && ["Gudang", "Pemilik", "Admin"].includes(userRole) && (record.__remainingOptions ?? "[]") !== "[]") actions.push({ action: "receive", label: "Terima barang" });
     }
     if (moduleKey === "production") {
-      if (status === "Direncanakan" && ["Produksi", "Pemilik"].includes(userRole)) actions.push({ action: "status", label: "Mulai produksi" });
-      if (status === "Diproses" && ["Produksi", "Pemilik"].includes(userRole)) actions.push({ action: "status-qc", label: "Kirim ke QC" });
-      if (["Menunggu QC", "Diproses"].includes(status) && ["Produksi", "Pemilik"].includes(userRole)) actions.push({ action: "quality-check", label: "Catat hasil QC" });
+      if (status === "Direncanakan" && ["Produksi", "Pemilik", "Admin"].includes(userRole)) actions.push({ action: "status", label: "Mulai produksi" });
+      if (status === "Diproses" && ["Produksi", "Pemilik", "Admin"].includes(userRole)) actions.push({ action: "status-qc", label: "Kirim ke QC" });
+      if (["Menunggu QC", "Diproses"].includes(status) && ["Produksi", "Pemilik", "Admin"].includes(userRole)) actions.push({ action: "quality-check", label: "Catat hasil QC" });
     }
     if (moduleKey === "sales") {
-      if (["Baru", "Menunggu Pengeluaran Barang", "Terpenuhi Sebagian"].includes(status) && ["Gudang", "Penjualan", "Pemilik"].includes(userRole)) actions.push({ action: "fulfill", label: "Penuhi pesanan" });
-      if (record.Pembayaran !== "Lunas" && ["Penjualan", "Keuangan", "Pemilik"].includes(userRole)) actions.push({ action: "payment", label: "Catat pembayaran" });
+      if (["Baru", "Menunggu Pengeluaran Barang", "Terpenuhi Sebagian"].includes(status) && ["Gudang", "Penjualan", "Pemilik", "Admin"].includes(userRole)) actions.push({ action: "fulfill", label: "Penuhi pesanan" });
+      if (record.Pembayaran !== "Lunas" && ["Penjualan", "Keuangan", "Pemilik", "Admin"].includes(userRole)) actions.push({ action: "payment", label: "Catat pembayaran" });
     }
-    if (moduleKey === "finance" && status === "Menunggu Verifikasi" && ["Keuangan", "Pemilik"].includes(userRole)) {
+    if (moduleKey === "finance" && status === "Menunggu Verifikasi" && ["Keuangan", "Pemilik", "Admin"].includes(userRole)) {
       actions.push({ action: "verify", label: "Verifikasi" }, { action: "reject", label: "Batalkan transaksi" });
     }
     if (moduleKey === "users" && ["Pemilik", "Admin"].includes(userRole)) actions.push({ action: "edit-user", label: "Ubah akses" });
@@ -359,9 +359,9 @@ export function ModuleView({ moduleKey, definition, initialRows, metrics, option
         <div><div className="eyebrow-row"><span className="eyebrow">{definition.eyebrow}</span><span className="live-pill"><i />DATA SUPABASE</span></div><h1>{definition.title}</h1><p>{definition.description}</p></div>
         <div className="heading-actions">
           <button className="secondary-button tool-button" onClick={() => router.refresh()} aria-label="Muat ulang data"><RefreshCw size={15} /><span>Segarkan</span></button>
-          {moduleKey === "products" && ["Pemilik", "Produksi"].includes(userRole) && <button className="secondary-button tool-button" onClick={() => openMasterAction("add-bom-item", "Tambah bahan ke BOM")}><Layers size={15} /><span>Atur BOM</span></button>}
-          {moduleKey === "purchases" && ["Pemilik", "Pengadaan"].includes(userRole) && <><button className="secondary-button tool-button" onClick={() => openMasterAction("create-supplier", "Tambah pemasok")}><Users size={15} /><span>Tambah pemasok</span></button><button className="secondary-button tool-button" onClick={() => openMasterAction("create-material", "Tambah bahan baku")}><Package size={15} /><span>Tambah bahan</span></button></>}
-          {moduleKey === "sales" && ["Pemilik", "Penjualan"].includes(userRole) && <button className="secondary-button tool-button" onClick={() => openMasterAction("create-customer", "Tambah pelanggan")}><Users size={15} /><span>Tambah pelanggan</span></button>}
+          {moduleKey === "products" && ["Pemilik", "Admin", "Produksi"].includes(userRole) && <button className="secondary-button tool-button" onClick={() => openMasterAction("add-bom-item", "Tambah bahan ke BOM")}><Layers size={15} /><span>Atur BOM</span></button>}
+          {moduleKey === "purchases" && ["Pemilik", "Admin", "Pengadaan"].includes(userRole) && <><button className="secondary-button tool-button" onClick={() => openMasterAction("create-supplier", "Tambah pemasok")}><Users size={15} /><span>Tambah pemasok</span></button><button className="secondary-button tool-button" onClick={() => openMasterAction("create-material", "Tambah bahan baku")}><Package size={15} /><span>Tambah bahan</span></button></>}
+          {moduleKey === "sales" && ["Pemilik", "Admin", "Penjualan"].includes(userRole) && <button className="secondary-button tool-button" onClick={() => openMasterAction("create-customer", "Tambah pelanggan")}><Users size={15} /><span>Tambah pelanggan</span></button>}
           {moduleKey === "reports" || moduleKey === "activity" ? <button className="primary-button" onClick={exportCsv}><Download size={16} />{definition.action}</button> : createable ? <button className="primary-button" onClick={openCreate}><Plus size={17} />{definition.action}</button> : null}
         </div>
       </div>
